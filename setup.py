@@ -1,18 +1,17 @@
 import uuid
 
 from setuptools import setup, find_packages
-from pip.req import parse_requirements
 
-# parse_requirements() returns generator of pip.req.InstallRequirement objects
-install_reqs = parse_requirements('requirements.txt', session=uuid.uuid1())
-
-# reqs is a list of requirement
-# e.g. ['django==1.5.1', 'mezzanine==1.4.6']
-reqs = [str(ir.req) for ir in install_reqs]
+with open("requirements.txt", "r") as f:
+    reqs = [
+        r
+        for r in f.read().splitlines()
+        if (len(r) > 0 and not (r.startswith("#") or r.startswith("git+")))
+    ]
 
 setup(
     name="pyfg",
-    version="0.50",
+    version="0.52",
     packages=find_packages(),
     author="XNET",
     author_email="lindblom+pyfg@spotify.com",

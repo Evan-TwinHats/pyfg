@@ -2,11 +2,9 @@
 from __future__ import unicode_literals
 
 from pyFG.forticonfig import FortiConfig
-from pyFG import py23_compat
-from pyFG import exceptions
 
+from netmiko import ConnectHandler
 
-import paramiko
 import re
 import os
 import io
@@ -19,7 +17,7 @@ logger = logging.getLogger('pyFG')
 
 class FortiOS(object):
 
-    def __init__(self, hostname, vdom=None, username=None, password=None, keyfile=None, timeout=60):
+    def __init__(self, hostname, username, password, vdom=None, device_type='fortinet', timeout=60):
         """
         Represents a device running FortiOS.
 
@@ -47,7 +45,7 @@ class FortiOS(object):
             * **timeout** (int) -- Time in seconds to wait for the device to respond.
 
         """
-        self.hostname = hostname
+        self.host = host
         self.vdom = vdom
         self.original_config = None
         self.running_config = FortiConfig('running', vdom=vdom)
@@ -55,69 +53,32 @@ class FortiOS(object):
         self.ssh = None
         self.username = username
         self.password = password
-        self.keyfile = keyfile
+        self.device_type = device_type
         self.timeout = timeout
-        
-        # Set key exchange explcitly to address known fortinet issue
-        paramiko.Transport._preferred_kex = ('diffie-hellman-group14-sha1',
-                                             'diffie-hellman-group-exchange-sha1',
-                                             'diffie-hellman-group-exchange-sha256',
-                                             'diffie-hellman-group1-sha1',
-                                             )
         
     def open(self):
         """
         Opens the ssh session with the device.
         """
 
-        logger.debug('Connecting to device %s, vdom %s' % (self.hostname, self.vdom))
-
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        logger.debug(f'Connecting to device {self.host}')
 
         cfg = {
-            'hostname': self.hostname,
-            'timeout': self.timeout,
+            'device_type': self.device_type,
+            'host': self.host,
             'username': self.username,
             'password': self.password,
-            'key_filename': self.keyfile
         }
 
-        if os.path.exists(os.path.expanduser("~/.ssh/config")):
-            ssh_config = paramiko.SSHConfig()
-            user_config_file = os.path.expanduser("~/.ssh/config")
-            with io.open(user_config_file, 'rt', encoding='utf-8') as f:
-                ssh_config.parse(f)
-
-            host_conf = ssh_config.lookup(self.hostname)
-            if host_conf:
-                if 'proxycommand' in host_conf:
-                    cfg['sock'] = paramiko.ProxyCommand(host_conf['proxycommand'])
-                if 'user' in host_conf:
-                    cfg['username'] = host_conf['user']
-                if 'identityfile' in host_conf:
-                    cfg['key_filename'] = host_conf['identityfile']
-                if 'hostname' in host_conf:
-                    cfg['hostname'] = host_conf['hostname']
-
-        self.ssh.connect(**cfg)
+        self.ssh = ConnectHandler(**cfg)
 
     def close(self):
         """
         Closes the ssh session with the device.
         """
 
-        logger.debug('Closing connection to device %s' % self.hostname)
+        logger.debug(f'Closing connection to device {self.host}')
         self.ssh.close()
-
-    @staticmethod
-    def _read_wrapper(data):
-        """Ensure unicode always returned on read."""
-        # Paramiko (strangely) in PY3 returns an int here.
-        if isinstance(data, int):
-            data = chr(data)
-        # Ensure unicode
-        return py23_compat.text_type(data)
 
     def execute_command(self, command):
         """
@@ -134,50 +95,21 @@ class FortiOS(object):
         Raises:
             exceptions.CommandExecutionException -- If it detects any problem with the command.
         """
-        logger.debug('Executing commands:\n %s' % command)
+        logger.debug(f'Executing commands:\n {command}')
 
         err_msg = 'Something happened when executing some commands on device'
 
-        chan = self.ssh.get_transport().open_session()
-        chan.settimeout(5)
-
-        chan.exec_command(command)
-
-        error_chan = chan.makefile_stderr()
-        output_chan = chan.makefile()
-
-        error = ''
-        output = ''
-        for e in error_chan.read():
-            error = error + self._read_wrapper(e)
-        for o in output_chan.read():
-            output = output + self._read_wrapper(o)
-
-        if len(error) > 0:
-            msg = '%s %s:\n%s\n%s' % (err_msg, self.ssh.get_host_keys().keys()[0], command, error)
-            logger.error(msg)
-            raise exceptions.CommandExecutionException(msg)
+        output = self.ssh.send_command(command)
 
         regex = re.compile('Command fail')
         if len(regex.findall(output)) > 0:
-            msg = '%s %s:\n%s\n%s' % (err_msg, self.ssh.get_host_keys().keys()[0], command, output)
+            msg = f'{err_msg}:\n{command}\n{output}'
             logger.error(msg)
             raise exceptions.CommandExecutionException(msg)
 
         output = output.splitlines()
 
-        # We look for the prompt and remove it
-        i = 0
-        for line in output:
-            current_line = line.split('#')
-
-            if len(current_line) > 1:
-                output[i] = current_line[1]
-            else:
-                output[i] = current_line[0]
-            i += 1
-
-        return output[:-1]
+        return output
 
     def load_config(self, path='', in_candidate=False, empty_candidate=False, config_text=None):
         """
@@ -203,11 +135,11 @@ class FortiOS(object):
         if config_text is None:
             if self.vdom is not None:
                 if self.vdom == 'global':
-                    command = 'conf global\nshow %s\nend' % path
+                    command = f'conf global\nshow {path}\nend'
                 else:
-                    command = 'conf vdom\nedit %s\nshow %s\nend' % (self.vdom, path)
+                    command = f'conf vdom\nedit {self.vdom}\nshow {path}\nend'
             else:
-                command = 'show %s' % path
+                command = f'show {path}'
 
             config_text = self.execute_command(command)
 
@@ -290,18 +222,18 @@ class FortiOS(object):
             if self.vdom is None:
                 pre = ''
             elif not 'global' in self.vdom:
-                config_vdom = 'conf vdom\n  edit %s\n' % self.vdom
+                config_vdom = f'conf vdom\n  edit {self.vdom}\n'
                 pre = 'conf global\n    '
             else:
                 pre = 'conf global\n    '
 
-            cmd = '%sexecute batch start\n' % pre
+            cmd = f'{pre}execute batch start\n'
             cmd += config_vdom
             cmd += config_text
             cmd += '\nexecute batch end\n'
 
             self.execute_command(cmd)
-            last_log = self.execute_command('%sexecute batch lastlog' % pre)
+            last_log = self.execute_command(f'{pre}execute batch lastlog')
 
             return self._parse_batch_lastlog(last_log)
 
@@ -325,7 +257,7 @@ class FortiOS(object):
 
         if len(wrong_commands) > 0:
             exit_code = -2
-            logging.debug('List of commands that failed: %s' % wrong_commands)
+            logging.debug(f'List of commands that failed: {wrong_commands}')
 
             if not force:
                 exit_code = -1
