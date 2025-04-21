@@ -78,7 +78,7 @@ class FortiOS(object):
         """
 
         logger.debug(f'Closing connection to device {self.host}')
-        self.ssh.close()
+        self.ssh.cleanup()
 
     def execute_command(self, command):
         """
