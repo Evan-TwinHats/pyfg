@@ -4,6 +4,7 @@ from __future__ import unicode_literals
 from pyFG.forticonfig import FortiConfig
 
 from netmiko import ConnectHandler
+import exceptions
 
 import re
 import os
