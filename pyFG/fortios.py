@@ -45,7 +45,7 @@ class FortiOS(object):
             * **timeout** (int) -- Time in seconds to wait for the device to respond.
 
         """
-        self.host = host
+        self.host = hostname
         self.vdom = vdom
         self.original_config = None
         self.running_config = FortiConfig('running', vdom=vdom)
