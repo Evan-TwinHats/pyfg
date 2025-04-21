@@ -7,13 +7,11 @@ from netmiko import ConnectHandler
 import exceptions
 
 import re
-import os
-import io
 from difflib import Differ
 
 import logging
 
-logger = logging.getLogger('pyFG')
+logger = logging.getLogger('fpyFG')
 
 
 class FortiOS(object):
